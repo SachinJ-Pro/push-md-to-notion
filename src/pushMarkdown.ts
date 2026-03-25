@@ -9,6 +9,7 @@ import graymatter from 'gray-matter';
 
 import { getCtx } from './actionCtx';
 import { getChangedMdFiles } from './git';
+import { normalizeMarkdownForNotion, preflightNotionMarkdown } from './markdownCompat';
 import { isNotionFrontmatter } from './notion';
 import { retry, RetryError } from './retry';
 
@@ -111,10 +112,34 @@ export async function pushMarkdownFile(mdFilePath: string) {
     await notion.updatePageTitle(pageId, pageTitle);
   }
 
+  const normalized = normalizeMarkdownForNotion(fileMatter.content);
+  const preflightWarnings = preflightNotionMarkdown(normalized.markdown);
+  console.log('Markdown compatibility summary', {
+    file: mdFilePath,
+    ...normalized.report,
+    preflightWarnings: preflightWarnings.length,
+  });
+  if (preflightWarnings.length) {
+    for (const warning of preflightWarnings) {
+      console.log('Preflight warning', { file: mdFilePath, ...warning });
+    }
+  }
+
   console.log('Adding markdown content');
-  await notion.appendMarkdown(pageId, sanitizeNotionUnsupportedLinks(fileMatter.content), [
-    createWarningBlock(mdFilePath),
-  ]);
+  try {
+    await notion.appendMarkdown(pageId, normalized.markdown, [createWarningBlock(mdFilePath)]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown Notion markdown validation error';
+    const category = categorizeValidationIssue(message);
+    throw new Error(
+      [
+        `Notion content append failed for ${mdFilePath}.`,
+        `Likely issue category: ${category}.`,
+        `Preflight warnings: ${preflightWarnings.length}.`,
+        `Original error: ${message}`,
+      ].join(' '),
+    );
+  }
   console.log('Markdown sync completed', { mdFilePath, pageId });
 }
 
@@ -122,9 +147,18 @@ function normalizeTitle(value: string) {
   return value.trim().toLowerCase();
 }
 
-function sanitizeNotionUnsupportedLinks(markdown: string) {
-  // Notion API rejects fragment-only links like [Section](#section-id) as invalid URLs.
-  return markdown.replace(/\[([^\]]+)\]\(#([^)]+)\)/g, '$1');
+function categorizeValidationIssue(message: string) {
+  const lowered = message.toLowerCase();
+  if (lowered.includes('invalid url')) {
+    return 'link-format';
+  }
+  if (lowered.includes('table row') || lowered.includes('table width')) {
+    return 'table-structure';
+  }
+  if (lowered.includes('validation_error')) {
+    return 'unsupported-markdown-construct';
+  }
+  return 'unknown';
 }
 
 function createWarningBlock(fileName: string): BlockObjectRequest {

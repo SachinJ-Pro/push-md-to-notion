@@ -59855,6 +59855,139 @@ function getChangedMdFiles() {
   return gitOutput.trim().split("\n").filter((fn) => fn.endsWith(".md"));
 }
 
+// src/markdownCompat.ts
+var TABLE_DELIMITER_RE = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+var FRAGMENT_LINK_RE = /\[([^\]]+)\]\(#([^)]+)\)/g;
+var FRAGMENT_LINK_DETECT_RE = /\[([^\]]+)\]\(#([^)]+)\)/;
+var INLINE_HTML_RE = /<[^>]+>/;
+function normalizeMarkdownForNotion(markdown) {
+  const anchorLinksRemoved = [...markdown.matchAll(FRAGMENT_LINK_RE)].length;
+  const withoutFragmentLinks = markdown.replace(FRAGMENT_LINK_RE, "$1");
+  const lines = withoutFragmentLinks.split("\n");
+  const normalizedLines = [];
+  let tablesSeen = 0;
+  let tableRowsNormalized = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const current = lines[i];
+    const next = lines[i + 1];
+    if (!isTableHeader(current, next)) {
+      normalizedLines.push(current);
+      continue;
+    }
+    tablesSeen += 1;
+    const tableLines = [current, next];
+    i += 2;
+    while (i < lines.length && isPotentialTableRow(lines[i])) {
+      tableLines.push(lines[i]);
+      i += 1;
+    }
+    i -= 1;
+    const normalizedTable = normalizeTableBlock(tableLines);
+    tableRowsNormalized += normalizedTable.rowsNormalized;
+    normalizedLines.push(...normalizedTable.lines);
+  }
+  return {
+    markdown: normalizedLines.join("\n"),
+    report: {
+      anchorLinksRemoved,
+      tablesSeen,
+      tableRowsNormalized
+    }
+  };
+}
+function preflightNotionMarkdown(markdown) {
+  const warnings = [];
+  if (FRAGMENT_LINK_DETECT_RE.test(markdown)) {
+    warnings.push({
+      code: "fragment-link",
+      message: "Fragment-only links (#section) detected; Notion API rejects these URLs."
+    });
+  }
+  const lines = markdown.split("\n");
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    if (!isTableHeader(lines[i], lines[i + 1])) {
+      continue;
+    }
+    const expectedCells = splitTableRow(lines[i]).length;
+    for (let j = i + 2; j < lines.length && isPotentialTableRow(lines[j]); j += 1) {
+      const rowCells = splitTableRow(lines[j]).length;
+      if (rowCells !== expectedCells) {
+        warnings.push({
+          code: "table-row-mismatch",
+          message: `Table row cell mismatch near line ${j + 1}. Expected ${expectedCells}, got ${rowCells}.`
+        });
+        break;
+      }
+    }
+  }
+  if (INLINE_HTML_RE.test(markdown)) {
+    warnings.push({
+      code: "inline-html",
+      message: "Inline HTML detected; conversion fidelity may vary in Notion."
+    });
+  }
+  return warnings;
+}
+function normalizeTableBlock(lines) {
+  const headerCells = splitTableRow(lines[0]);
+  const expectedCells = headerCells.length;
+  const normalized = [normalizeTableLine(lines[0], expectedCells), lines[1]];
+  let rowsNormalized = normalized[0] === lines[0] ? 0 : 1;
+  for (let i = 2; i < lines.length; i += 1) {
+    const nextLine = normalizeTableLine(lines[i], expectedCells);
+    if (nextLine !== lines[i]) {
+      rowsNormalized += 1;
+    }
+    normalized.push(nextLine);
+  }
+  return { lines: normalized, rowsNormalized };
+}
+function normalizeTableLine(line, expectedCells) {
+  const cells = splitTableRow(line);
+  if (cells.length === expectedCells) {
+    return rebuildTableRow(cells);
+  }
+  if (cells.length > expectedCells) {
+    const head = cells.slice(0, expectedCells - 1);
+    const mergedLast = cells.slice(expectedCells - 1).join(" | ");
+    return rebuildTableRow([...head, mergedLast]);
+  }
+  const padded = [...cells, ...Array.from({ length: expectedCells - cells.length }, () => "")];
+  return rebuildTableRow(padded);
+}
+function rebuildTableRow(cells) {
+  const escaped = cells.map((cell) => cell.replaceAll("|", "\\|").trim());
+  return `| ${escaped.join(" | ")} |`;
+}
+function isPotentialTableRow(line) {
+  return line.includes("|") && line.trim().length > 0;
+}
+function isTableHeader(line, nextLine) {
+  return typeof nextLine === "string" && line.includes("|") && TABLE_DELIMITER_RE.test(nextLine);
+}
+function splitTableRow(line) {
+  const row = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = [];
+  let inCode = false;
+  let current = "";
+  for (let i = 0; i < row.length; i += 1) {
+    const char = row[i];
+    if (char === "`" && row[i - 1] !== "\\") {
+      inCode = !inCode;
+      current += char;
+      continue;
+    }
+    if (char === "|" && !inCode && row[i - 1] !== "\\") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
 // src/retry.ts
 var import_promises = require("node:timers/promises");
 var RetryError = class extends Error {
@@ -59974,17 +60107,50 @@ async function pushMarkdownFile(mdFilePath) {
     console.log(`Updating title: ${pageTitle}`);
     await notion.updatePageTitle(pageId, pageTitle);
   }
+  const normalized = normalizeMarkdownForNotion(fileMatter.content);
+  const preflightWarnings = preflightNotionMarkdown(normalized.markdown);
+  console.log("Markdown compatibility summary", {
+    file: mdFilePath,
+    ...normalized.report,
+    preflightWarnings: preflightWarnings.length
+  });
+  if (preflightWarnings.length) {
+    for (const warning of preflightWarnings) {
+      console.log("Preflight warning", { file: mdFilePath, ...warning });
+    }
+  }
   console.log("Adding markdown content");
-  await notion.appendMarkdown(pageId, sanitizeNotionUnsupportedLinks(fileMatter.content), [
-    createWarningBlock(mdFilePath)
-  ]);
+  try {
+    await notion.appendMarkdown(pageId, normalized.markdown, [createWarningBlock(mdFilePath)]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown Notion markdown validation error";
+    const category = categorizeValidationIssue(message);
+    throw new Error(
+      [
+        `Notion content append failed for ${mdFilePath}.`,
+        `Likely issue category: ${category}.`,
+        `Preflight warnings: ${preflightWarnings.length}.`,
+        `Original error: ${message}`
+      ].join(" ")
+    );
+  }
   console.log("Markdown sync completed", { mdFilePath, pageId });
 }
 function normalizeTitle(value) {
   return value.trim().toLowerCase();
 }
-function sanitizeNotionUnsupportedLinks(markdown) {
-  return markdown.replace(/\[([^\]]+)\]\(#([^)]+)\)/g, "$1");
+function categorizeValidationIssue(message) {
+  const lowered = message.toLowerCase();
+  if (lowered.includes("invalid url")) {
+    return "link-format";
+  }
+  if (lowered.includes("table row") || lowered.includes("table width")) {
+    return "table-structure";
+  }
+  if (lowered.includes("validation_error")) {
+    return "unsupported-markdown-construct";
+  }
+  return "unknown";
 }
 function createWarningBlock(fileName) {
   return {
