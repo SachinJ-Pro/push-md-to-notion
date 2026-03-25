@@ -43,6 +43,7 @@ jobs:
         with:
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-parent-page-id: ${{ secrets.NOTION_PARENT_PAGE_ID }}
+          sync-engine: notion-markdown
 ```
 
 ## 3. Choose a Notion parent page and add the integration
@@ -69,6 +70,11 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
 - no match: create a new page under `notion-parent-page-id`
 - multiple matches: fail for that file as ambiguous
 
+## Optional input: sync engine
+
+- `sync-engine: notion-markdown` (default) uses Notion's native markdown API.
+- `sync-engine: block-parser` uses the legacy markdown-to-block parser path.
+
 # Current Features
 
 - Syncs changed markdown files from the latest commit in the checked out branch.
@@ -77,6 +83,8 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
   - page title = markdown filename without `.md`
   - trimmed, case-insensitive title match
   - create page under `notion-parent-page-id` when no match exists
+- Uses Notion native markdown sync by default (`sync-engine: notion-markdown`).
+- Supports fallback sync via parser path (`sync-engine: block-parser`).
 - Preserves backward compatibility for existing files that already use `notion_page`.
 - Automatically clears existing Notion page content and appends converted markdown blocks.
 - Adds a warning callout at the top of each synced page pointing to the GitHub markdown source.

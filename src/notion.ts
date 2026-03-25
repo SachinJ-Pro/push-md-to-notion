@@ -100,6 +100,23 @@ export class NotionApi {
     await this.client.pages.update({ erase_content: true, page_id: pageId });
   }
 
+  public async replacePageContentWithMarkdown(pageId: string, markdown: string) {
+    await this.client.pages.updateMarkdown({
+      page_id: pageId,
+      type: 'replace_content',
+      replace_content: {
+        new_str: markdown,
+        allow_deleting_content: true,
+      },
+    });
+  }
+
+  public async retrievePageMarkdown(pageId: string) {
+    return this.client.pages.retrieveMarkdown({
+      page_id: pageId,
+    });
+  }
+
   /**
    * Convert markdown to the notion block data format and append it to an existing block.
    * @param blockId Block which the markdown elements will be appended to.

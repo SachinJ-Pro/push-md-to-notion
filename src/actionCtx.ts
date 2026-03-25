@@ -2,9 +2,12 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { NotionApi } from './notion';
 
+export type SyncEngine = 'notion-markdown' | 'block-parser';
+
 interface ActionCtx {
   notion: NotionApi;
   notionParentPageId: string;
+  syncEngine: SyncEngine;
 }
 class ContextError extends Error {}
 

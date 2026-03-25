@@ -33,8 +33,8 @@ export async function pushUpdatedMarkdownFiles() {
 }
 
 export async function pushMarkdownFile(mdFilePath: string) {
-  const { notion, notionParentPageId } = getCtx();
-  console.log('Starting markdown sync', { mdFilePath, notionParentPageId });
+  const { notion, notionParentPageId, syncEngine } = getCtx();
+  console.log('Starting markdown sync', { mdFilePath, notionParentPageId, syncEngine });
   const fileContents = await pfs.readFile(mdFilePath, { encoding: 'utf-8' });
   const fileMatter = graymatter(fileContents);
 
@@ -112,33 +112,68 @@ export async function pushMarkdownFile(mdFilePath: string) {
     await notion.updatePageTitle(pageId, pageTitle);
   }
 
-  const normalized = normalizeMarkdownForNotion(fileMatter.content);
-  const preflightWarnings = preflightNotionMarkdown(normalized.markdown);
-  console.log('Markdown compatibility summary', {
-    file: mdFilePath,
-    ...normalized.report,
-    preflightWarnings: preflightWarnings.length,
-  });
-  if (preflightWarnings.length) {
-    for (const warning of preflightWarnings) {
-      console.log('Preflight warning', { file: mdFilePath, ...warning });
-    }
-  }
+  const sourceUrl = createGithubFileUrl(mdFilePath);
 
-  console.log('Adding markdown content');
-  try {
-    await notion.appendMarkdown(pageId, normalized.markdown, [createWarningBlock(mdFilePath)]);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Notion markdown validation error';
-    const category = categorizeValidationIssue(message);
-    throw new Error(
-      [
-        `Notion content append failed for ${mdFilePath}.`,
-        `Likely issue category: ${category}.`,
-        `Preflight warnings: ${preflightWarnings.length}.`,
-        `Original error: ${message}`,
-      ].join(' '),
-    );
+  if (syncEngine === 'notion-markdown') {
+    const preflightWarnings = preflightNotionMarkdown(fileMatter.content);
+    console.log('Markdown preflight summary', {
+      file: mdFilePath,
+      syncEngine,
+      preflightWarnings: preflightWarnings.length,
+    });
+    if (preflightWarnings.length) {
+      for (const warning of preflightWarnings) {
+        console.log('Preflight warning', { file: mdFilePath, ...warning });
+      }
+    }
+
+    try {
+      await notion.replacePageContentWithMarkdown(
+        pageId,
+        createMarkdownWarningText(mdFilePath, sourceUrl, fileMatter.content),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown Notion markdown validation error';
+      const category = categorizeValidationIssue(message);
+      throw new Error(
+        [
+          `Notion markdown update failed for ${mdFilePath}.`,
+          `Likely issue category: ${category}.`,
+          `Preflight warnings: ${preflightWarnings.length}.`,
+          `Original error: ${message}`,
+        ].join(' '),
+      );
+    }
+  } else {
+    const normalized = normalizeMarkdownForNotion(fileMatter.content);
+    const preflightWarnings = preflightNotionMarkdown(normalized.markdown);
+    console.log('Markdown compatibility summary', {
+      file: mdFilePath,
+      syncEngine,
+      ...normalized.report,
+      preflightWarnings: preflightWarnings.length,
+    });
+    if (preflightWarnings.length) {
+      for (const warning of preflightWarnings) {
+        console.log('Preflight warning', { file: mdFilePath, ...warning });
+      }
+    }
+
+    console.log('Adding markdown content via block parser');
+    try {
+      await notion.appendMarkdown(pageId, normalized.markdown, [createWarningBlock(mdFilePath, sourceUrl)]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown Notion markdown validation error';
+      const category = categorizeValidationIssue(message);
+      throw new Error(
+        [
+          `Notion content append failed for ${mdFilePath}.`,
+          `Likely issue category: ${category}.`,
+          `Preflight warnings: ${preflightWarnings.length}.`,
+          `Original error: ${message}`,
+        ].join(' '),
+      );
+    }
   }
   console.log('Markdown sync completed', { mdFilePath, pageId });
 }
@@ -161,12 +196,14 @@ function categorizeValidationIssue(message: string) {
   return 'unknown';
 }
 
-function createWarningBlock(fileName: string): BlockObjectRequest {
+function createWarningBlock(fileName: string, sourceUrl?: string): BlockObjectRequest {
   return {
     type: 'callout',
     callout: {
       rich_text: markdownToRichText(
-        `This file is linked to Github. Changes must be made in the [markdown file](${github.context.payload.repository?.html_url}/blob/${github.context.sha}/${fileName}) to be permanent.`,
+        sourceUrl
+          ? `This file is linked to Github. Changes must be made in the [markdown file](${sourceUrl}) to be permanent.`
+          : `This file is linked to Github. Changes must be made in the markdown file (${fileName}) to be permanent.`,
       ),
       icon: {
         emoji: '⚠',
@@ -174,4 +211,19 @@ function createWarningBlock(fileName: string): BlockObjectRequest {
       color: 'yellow_background',
     },
   };
+}
+
+function createMarkdownWarningText(fileName: string, sourceUrl: string | undefined, markdownContent: string) {
+  const prefix = sourceUrl
+    ? `> ⚠ This file is linked to Github. Changes must be made in the [markdown file](${sourceUrl}) to be permanent.`
+    : `> ⚠ This file is linked to Github. Changes must be made in the markdown file (${fileName}) to be permanent.`;
+  return `${prefix}\n\n${markdownContent}`;
+}
+
+function createGithubFileUrl(fileName: string) {
+  const repositoryUrl = github.context.payload.repository?.html_url;
+  if (!repositoryUrl || !github.context.sha) {
+    return undefined;
+  }
+  return `${repositoryUrl}/blob/${github.context.sha}/${fileName}`;
 }
