@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 
-import { actionStore, type DeletionMode, type TargetEnv } from './actionCtx';
+import { actionStore, type DeletionMode, type ResolutionMode, type TargetEnv } from './actionCtx';
 import { NotionApi } from './notion';
 import { pushUpdatedMarkdownFiles } from './pushMarkdown';
 
@@ -10,12 +10,21 @@ async function main() {
     const notionParentPageId = core.getInput('notion-parent-page-id', { required: true });
     const targetEnv = parseTargetEnv(core.getInput('target-env').trim() || 'preview');
     const deletionMode = parseDeletionMode(core.getInput('deletion-mode').trim() || 'hard-delete');
-    const writeBackFrontmatter = parseBooleanInput(core.getInput('write-back-frontmatter').trim() || 'true');
+    const resolutionMode = parseResolutionMode(core.getInput('resolution-mode').trim() || 'name-based');
+    const writeBackFrontmatter = parseBooleanInput(core.getInput('write-back-frontmatter').trim() || 'false');
     const baseRevision = core.getInput('base-revision').trim() || undefined;
     const notion = new NotionApi(token);
 
     await actionStore.run(
-      { notion, notionParentPageId, targetEnv, deletionMode, writeBackFrontmatter, baseRevision },
+      {
+        notion,
+        notionParentPageId,
+        targetEnv,
+        deletionMode,
+        resolutionMode,
+        writeBackFrontmatter,
+        baseRevision,
+      },
       pushUpdatedMarkdownFiles,
     );
   } catch (e) {
@@ -37,6 +46,13 @@ function parseDeletionMode(value: string): DeletionMode {
     return value;
   }
   throw new Error(`Invalid deletion-mode "${value}". Valid values are "hard-delete" or "keep".`);
+}
+
+function parseResolutionMode(value: string): ResolutionMode {
+  if (value === 'name-based' || value === 'id-based') {
+    return value;
+  }
+  throw new Error(`Invalid resolution-mode "${value}". Valid values are "name-based" or "id-based".`);
 }
 
 function parseBooleanInput(value: string) {

@@ -4,12 +4,14 @@ import { NotionApi } from './notion';
 
 export type TargetEnv = 'preview' | 'prod';
 export type DeletionMode = 'hard-delete' | 'keep';
+export type ResolutionMode = 'name-based' | 'id-based';
 
 interface ActionCtx {
   notion: NotionApi;
   notionParentPageId: string;
   targetEnv: TargetEnv;
   deletionMode: DeletionMode;
+  resolutionMode: ResolutionMode;
   writeBackFrontmatter: boolean;
   baseRevision?: string;
 }

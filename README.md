@@ -45,7 +45,8 @@ jobs:
           notion-parent-page-id: ${{ secrets.NOTION_PARENT_PAGE_ID }}
           target-env: preview
           deletion-mode: hard-delete
-          write-back-frontmatter: true
+          resolution-mode: name-based
+          write-back-frontmatter: false
           base-revision: ${{ github.event.pull_request.base.sha }}
 ```
 
@@ -77,15 +78,17 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
 
 - `target-env`: `preview` or `prod` (default: `preview`)
 - `deletion-mode`: `hard-delete` or `keep` (default: `hard-delete`)
-- `write-back-frontmatter`: `true` or `false` (default: `true`)
+- `resolution-mode`: `name-based` or `id-based` (default: `name-based`)
+- `write-back-frontmatter`: `true` or `false` (default: `false`)
 - `base-revision`: git SHA to diff against for add/modify/rename/delete detection
 
 # Current Features
 
 - Syncs markdown changes by git status (add/modify/rename/delete) between `base-revision` and `HEAD`.
-- Supports update-by-ID with frontmatter `notion_page`, plus env-specific mapping:
+- Supports optional update-by-ID with frontmatter `notion_page`, plus env-specific mapping:
   - `notion_page_preview`
   - `notion_page_prod`
+- Supports name-based resolution by filename/title under the configured parent page.
 - Supports create-or-update (upsert) when `notion_page` is absent:
   - page title = markdown filename without `.md`
   - trimmed, case-insensitive title match

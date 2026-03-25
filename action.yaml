@@ -18,6 +18,9 @@ inputs:
   deletion-mode:
     description: 'Deletion mode for removed markdown files: hard-delete or keep'
     required: false
+  resolution-mode:
+    description: 'Page resolution mode: name-based (default) or id-based'
+    required: false
   write-back-frontmatter:
     description: 'Write notion page IDs back to markdown frontmatter and push bot commit (true/false)'
     required: false

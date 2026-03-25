@@ -5,7 +5,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import graymatter from 'gray-matter';
 
-import { getCtx, type TargetEnv } from './actionCtx';
+import { getCtx, type ResolutionMode, type TargetEnv } from './actionCtx';
 import { commitAndPushFiles, getChangedMdFiles, getFileContentAtRevision, type MdFileChange } from './git';
 import { isNotionFrontmatter, type NotionFrontmatter } from './notion';
 import { retry, RetryError } from './retry';
@@ -55,13 +55,15 @@ export async function pushMarkdownFile(
   mdFileChange: MdFileChange,
   filesNeedingWriteBack: string[],
 ) {
-  const { notion, notionParentPageId, targetEnv, deletionMode, baseRevision, writeBackFrontmatter } = getCtx();
+  const { notion, notionParentPageId, targetEnv, deletionMode, resolutionMode, baseRevision, writeBackFrontmatter } =
+    getCtx();
   const mdFilePath = mdFileChange.path;
   console.log('Starting markdown sync', {
     mdFileChange,
     notionParentPageId,
     targetEnv,
     deletionMode,
+    resolutionMode,
   });
 
   if (mdFileChange.status === 'D') {
@@ -69,27 +71,12 @@ export async function pushMarkdownFile(
       console.log('Skipping deleted markdown file because deletion-mode=keep', { file: mdFilePath });
       return;
     }
-    if (!baseRevision) {
-      throw new Error(`Cannot process deleted file ${mdFilePath} without base-revision input`);
-    }
-    const oldContent = getFileContentAtRevision(baseRevision, mdFilePath);
-    if (!oldContent) {
-      console.log('Deleted file content could not be loaded from base revision, skipping delete', {
-        file: mdFilePath,
-        baseRevision,
-      });
-      return;
-    }
-    const oldMatter = graymatter(oldContent);
-    if (!isNotionFrontmatter(oldMatter.data)) {
-      console.log('Deleted file has no notion frontmatter, skipping delete', { file: mdFilePath });
-      return;
-    }
-    const pageId = resolvePageIdForEnv(oldMatter.data, targetEnv);
+    const pageId = await resolveDeletedFilePageId(mdFilePath, notionParentPageId, targetEnv, resolutionMode);
     if (!pageId) {
-      console.log('Deleted file has no mapped Notion page id for env, skipping delete', {
+      console.log('No page mapping found for deleted file, skipping delete', {
         file: mdFilePath,
         targetEnv,
+        resolutionMode,
       });
       return;
     }
@@ -111,7 +98,7 @@ export async function pushMarkdownFile(
   let pageCreated = false;
 
   const envPageId = resolvePageIdForEnv(pageData, targetEnv);
-  if (typeof envPageId === 'string') {
+  if (resolutionMode === 'id-based' && typeof envPageId === 'string') {
     console.log('Notion page frontmatter found', {
       frontmatter: fileMatter.data,
       file: mdFilePath,
@@ -131,7 +118,7 @@ export async function pushMarkdownFile(
     }
   } else {
     const canonicalTitle = path.basename(mdFilePath, '.md');
-    console.log('No notion_page frontmatter, entering upsert mode', { canonicalTitle });
+    console.log('Entering title upsert mode', { canonicalTitle, resolutionMode });
     const matches = (await notion.searchPagesByTitle(canonicalTitle, notionParentPageId || undefined)).filter(
       (page) => normalizeTitle(page.title) === normalizeTitle(canonicalTitle),
     );
@@ -176,7 +163,7 @@ export async function pushMarkdownFile(
     await notion.updatePageTitle(pageId, pageTitle);
   }
 
-  if (pageCreated) {
+  if (pageCreated && resolutionMode === 'id-based') {
     setPageIdForEnv(pageData, targetEnv, pageId);
     if (writeBackFrontmatter) {
       const updatedFrontmatter = graymatter.stringify(fileMatter.content, pageData);
@@ -260,4 +247,42 @@ function setPageIdForEnv(frontmatter: NotionFrontmatter, targetEnv: TargetEnv, p
     return;
   }
   frontmatter.notion_page_prod = pageId;
+}
+
+async function resolveDeletedFilePageId(
+  mdFilePath: string,
+  notionParentPageId: string,
+  targetEnv: TargetEnv,
+  resolutionMode: ResolutionMode,
+) {
+  const { notion, baseRevision } = getCtx();
+
+  if (resolutionMode === 'id-based') {
+    if (!baseRevision) {
+      throw new Error(`Cannot process deleted file ${mdFilePath} without base-revision input`);
+    }
+    const oldContent = getFileContentAtRevision(baseRevision, mdFilePath);
+    if (!oldContent) {
+      return undefined;
+    }
+    const oldMatter = graymatter(oldContent);
+    if (!isNotionFrontmatter(oldMatter.data)) {
+      return undefined;
+    }
+    return resolvePageIdForEnv(oldMatter.data, targetEnv);
+  }
+
+  const canonicalTitle = path.basename(mdFilePath, '.md');
+  const matches = (await notion.searchPagesByTitle(canonicalTitle, notionParentPageId || undefined)).filter(
+    (page) => normalizeTitle(page.title) === normalizeTitle(canonicalTitle),
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple Notion pages matched "${canonicalTitle}" while deleting ${mdFilePath}. Refusing unsafe delete.`,
+    );
+  }
+  return matches[0].id;
 }

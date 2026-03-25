@@ -48167,40 +48167,26 @@ async function pushUpdatedMarkdownFiles() {
   }
 }
 async function pushMarkdownFile(mdFileChange, filesNeedingWriteBack) {
-  const { notion, notionParentPageId, targetEnv, deletionMode, baseRevision, writeBackFrontmatter } = getCtx();
+  const { notion, notionParentPageId, targetEnv, deletionMode, resolutionMode, baseRevision, writeBackFrontmatter } = getCtx();
   const mdFilePath = mdFileChange.path;
   console.log("Starting markdown sync", {
     mdFileChange,
     notionParentPageId,
     targetEnv,
-    deletionMode
+    deletionMode,
+    resolutionMode
   });
   if (mdFileChange.status === "D") {
     if (deletionMode === "keep") {
       console.log("Skipping deleted markdown file because deletion-mode=keep", { file: mdFilePath });
       return;
     }
-    if (!baseRevision) {
-      throw new Error(`Cannot process deleted file ${mdFilePath} without base-revision input`);
-    }
-    const oldContent = getFileContentAtRevision(baseRevision, mdFilePath);
-    if (!oldContent) {
-      console.log("Deleted file content could not be loaded from base revision, skipping delete", {
-        file: mdFilePath,
-        baseRevision
-      });
-      return;
-    }
-    const oldMatter = (0, import_gray_matter.default)(oldContent);
-    if (!isNotionFrontmatter(oldMatter.data)) {
-      console.log("Deleted file has no notion frontmatter, skipping delete", { file: mdFilePath });
-      return;
-    }
-    const pageId2 = resolvePageIdForEnv(oldMatter.data, targetEnv);
+    const pageId2 = await resolveDeletedFilePageId(mdFilePath, notionParentPageId, targetEnv, resolutionMode);
     if (!pageId2) {
-      console.log("Deleted file has no mapped Notion page id for env, skipping delete", {
+      console.log("No page mapping found for deleted file, skipping delete", {
         file: mdFilePath,
-        targetEnv
+        targetEnv,
+        resolutionMode
       });
       return;
     }
@@ -48218,7 +48204,7 @@ async function pushMarkdownFile(mdFileChange, filesNeedingWriteBack) {
   let pageTitle;
   let pageCreated = false;
   const envPageId = resolvePageIdForEnv(pageData, targetEnv);
-  if (typeof envPageId === "string") {
+  if (resolutionMode === "id-based" && typeof envPageId === "string") {
     console.log("Notion page frontmatter found", {
       frontmatter: fileMatter.data,
       file: mdFilePath,
@@ -48233,7 +48219,7 @@ async function pushMarkdownFile(mdFileChange, filesNeedingWriteBack) {
     }
   } else {
     const canonicalTitle = import_node_path.default.basename(mdFilePath, ".md");
-    console.log("No notion_page frontmatter, entering upsert mode", { canonicalTitle });
+    console.log("Entering title upsert mode", { canonicalTitle, resolutionMode });
     const matches = (await notion.searchPagesByTitle(canonicalTitle, notionParentPageId || void 0)).filter(
       (page) => normalizeTitle(page.title) === normalizeTitle(canonicalTitle)
     );
@@ -48271,7 +48257,7 @@ async function pushMarkdownFile(mdFileChange, filesNeedingWriteBack) {
     console.log(`Updating title: ${pageTitle}`);
     await notion.updatePageTitle(pageId, pageTitle);
   }
-  if (pageCreated) {
+  if (pageCreated && resolutionMode === "id-based") {
     setPageIdForEnv(pageData, targetEnv, pageId);
     if (writeBackFrontmatter) {
       const updatedFrontmatter = import_gray_matter.default.stringify(fileMatter.content, pageData);
@@ -48347,6 +48333,36 @@ function setPageIdForEnv(frontmatter, targetEnv, pageId) {
   }
   frontmatter.notion_page_prod = pageId;
 }
+async function resolveDeletedFilePageId(mdFilePath, notionParentPageId, targetEnv, resolutionMode) {
+  const { notion, baseRevision } = getCtx();
+  if (resolutionMode === "id-based") {
+    if (!baseRevision) {
+      throw new Error(`Cannot process deleted file ${mdFilePath} without base-revision input`);
+    }
+    const oldContent = getFileContentAtRevision(baseRevision, mdFilePath);
+    if (!oldContent) {
+      return void 0;
+    }
+    const oldMatter = (0, import_gray_matter.default)(oldContent);
+    if (!isNotionFrontmatter(oldMatter.data)) {
+      return void 0;
+    }
+    return resolvePageIdForEnv(oldMatter.data, targetEnv);
+  }
+  const canonicalTitle = import_node_path.default.basename(mdFilePath, ".md");
+  const matches = (await notion.searchPagesByTitle(canonicalTitle, notionParentPageId || void 0)).filter(
+    (page) => normalizeTitle(page.title) === normalizeTitle(canonicalTitle)
+  );
+  if (matches.length === 0) {
+    return void 0;
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple Notion pages matched "${canonicalTitle}" while deleting ${mdFilePath}. Refusing unsafe delete.`
+    );
+  }
+  return matches[0].id;
+}
 
 // src/main.ts
 async function main() {
@@ -48355,11 +48371,20 @@ async function main() {
     const notionParentPageId = core2.getInput("notion-parent-page-id", { required: true });
     const targetEnv = parseTargetEnv(core2.getInput("target-env").trim() || "preview");
     const deletionMode = parseDeletionMode(core2.getInput("deletion-mode").trim() || "hard-delete");
-    const writeBackFrontmatter = parseBooleanInput(core2.getInput("write-back-frontmatter").trim() || "true");
+    const resolutionMode = parseResolutionMode(core2.getInput("resolution-mode").trim() || "name-based");
+    const writeBackFrontmatter = parseBooleanInput(core2.getInput("write-back-frontmatter").trim() || "false");
     const baseRevision = core2.getInput("base-revision").trim() || void 0;
     const notion = new NotionApi(token);
     await actionStore.run(
-      { notion, notionParentPageId, targetEnv, deletionMode, writeBackFrontmatter, baseRevision },
+      {
+        notion,
+        notionParentPageId,
+        targetEnv,
+        deletionMode,
+        resolutionMode,
+        writeBackFrontmatter,
+        baseRevision
+      },
       pushUpdatedMarkdownFiles
     );
   } catch (e) {
@@ -48378,6 +48403,12 @@ function parseDeletionMode(value) {
     return value;
   }
   throw new Error(`Invalid deletion-mode "${value}". Valid values are "hard-delete" or "keep".`);
+}
+function parseResolutionMode(value) {
+  if (value === "name-based" || value === "id-based") {
+    return value;
+  }
+  throw new Error(`Invalid resolution-mode "${value}". Valid values are "name-based" or "id-based".`);
 }
 function parseBooleanInput(value) {
   if (value === "true") {
