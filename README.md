@@ -69,6 +69,27 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
 - no match: create a new page under `notion-parent-page-id`
 - multiple matches: fail for that file as ambiguous
 
+# Current Features
+
+- Syncs changed markdown files from the latest commit in the checked out branch.
+- Supports update-by-ID with frontmatter `notion_page`.
+- Supports create-or-update (upsert) when `notion_page` is absent:
+  - page title = markdown filename without `.md`
+  - trimmed, case-insensitive title match
+  - create page under `notion-parent-page-id` when no match exists
+- Preserves backward compatibility for existing files that already use `notion_page`.
+- Automatically clears existing Notion page content and appends converted markdown blocks.
+- Adds a warning callout at the top of each synced page pointing to the GitHub markdown source.
+- Handles Notion API rejection of fragment-only markdown links (`#section`) by sanitizing them before upload.
+
+# Current Limitations
+
+- Only markdown files from the latest commit are synced (not the full PR diff by default).
+- Fragment-only links like `[Section](#section-id)` are converted to plain text, so in-page TOC links are not clickable in Notion.
+- Local/relative image paths are not uploaded to Notion; use publicly reachable image URLs for reliable rendering.
+- Duplicate page-title matches under the selected parent are treated as errors.
+- Requires `notion-parent-page-id` input for create-path behavior.
+
 # Limitations
 
 ## Notion API
