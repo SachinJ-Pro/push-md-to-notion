@@ -59895,6 +59895,7 @@ async function retry(fn, opts = {}) {
 // src/pushMarkdown.ts
 async function pushUpdatedMarkdownFiles() {
   const markdownFiles = getChangedMdFiles();
+  console.log("Markdown files detected in latest commit", { markdownFiles });
   const fileFailures = [];
   for (const mdFileName of markdownFiles) {
     const res = await retry(() => pushMarkdownFile(mdFileName), {
@@ -59911,6 +59912,7 @@ async function pushUpdatedMarkdownFiles() {
 }
 async function pushMarkdownFile(mdFilePath) {
   const { notion, notionParentPageId } = getCtx();
+  console.log("Starting markdown sync", { mdFilePath, notionParentPageId });
   const fileContents = await import_promises2.default.readFile(mdFilePath, { encoding: "utf-8" });
   const fileMatter = (0, import_gray_matter.default)(fileContents);
   if (!isNotionFrontmatter(fileMatter.data)) {
@@ -59933,9 +59935,15 @@ async function pushMarkdownFile(mdFilePath) {
     }
   } else {
     const canonicalTitle = import_node_path.default.basename(mdFilePath, ".md");
+    console.log("No notion_page frontmatter, entering upsert mode", { canonicalTitle });
     const matches = (await notion.searchPagesByTitle(canonicalTitle, notionParentPageId || void 0)).filter(
       (page) => normalizeTitle(page.title) === normalizeTitle(canonicalTitle)
     );
+    console.log("Notion title matches after normalization", {
+      canonicalTitle,
+      matchCount: matches.length,
+      matches
+    });
     if (matches.length > 1) {
       const duplicatePageInfo = matches.map((match) => `${match.title} (${match.id})`).join(", ");
       throw new Error(
@@ -59968,6 +59976,7 @@ async function pushMarkdownFile(mdFilePath) {
   }
   console.log("Adding markdown content");
   await notion.appendMarkdown(pageId, fileMatter.content, [createWarningBlock(mdFilePath)]);
+  console.log("Markdown sync completed", { mdFilePath, pageId });
 }
 function normalizeTitle(value) {
   return value.trim().toLowerCase();
