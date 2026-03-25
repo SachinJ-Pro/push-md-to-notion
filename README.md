@@ -43,6 +43,10 @@ jobs:
         with:
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-parent-page-id: ${{ secrets.NOTION_PARENT_PAGE_ID }}
+          target-env: preview
+          deletion-mode: hard-delete
+          write-back-frontmatter: true
+          base-revision: ${{ github.event.pull_request.base.sha }}
 ```
 
 ## 3. Choose a Notion parent page and add the integration
@@ -69,10 +73,19 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
 - no match: create a new page under `notion-parent-page-id`
 - multiple matches: fail for that file as ambiguous
 
+## Optional behavior inputs
+
+- `target-env`: `preview` or `prod` (default: `preview`)
+- `deletion-mode`: `hard-delete` or `keep` (default: `hard-delete`)
+- `write-back-frontmatter`: `true` or `false` (default: `true`)
+- `base-revision`: git SHA to diff against for add/modify/rename/delete detection
+
 # Current Features
 
-- Syncs changed markdown files from the latest commit in the checked out branch.
-- Supports update-by-ID with frontmatter `notion_page`.
+- Syncs markdown changes by git status (add/modify/rename/delete) between `base-revision` and `HEAD`.
+- Supports update-by-ID with frontmatter `notion_page`, plus env-specific mapping:
+  - `notion_page_preview`
+  - `notion_page_prod`
 - Supports create-or-update (upsert) when `notion_page` is absent:
   - page title = markdown filename without `.md`
   - trimmed, case-insensitive title match
@@ -81,10 +94,11 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
 - Preserves backward compatibility for existing files that already use `notion_page`.
 - Replaces existing page content with markdown using Notion's own parser.
 - Adds a markdown warning blockquote at the top pointing to the GitHub source file.
+- Handles deleted markdown files with `deletion-mode: hard-delete` by moving mapped Notion pages to trash.
+- Optionally writes created page IDs back to frontmatter and pushes a bot commit.
 
 # Current Limitations
 
-- Only markdown files from the latest commit are synced (not the full PR diff by default).
 - Rendering behavior follows Notion markdown API rules (some markdown/HTML variants may still render differently than GitHub).
 - Local/relative image paths are not uploaded by this action; use publicly reachable image URLs.
 - Duplicate page-title matches under the selected parent are treated as errors.

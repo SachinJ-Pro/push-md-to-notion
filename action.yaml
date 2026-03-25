@@ -12,6 +12,18 @@ inputs:
   notion-parent-page-id:
     description: 'Parent Notion page ID used for creating new pages when notion_page frontmatter is not present'
     required: true
+  target-env:
+    description: 'Sync target environment: preview or prod'
+    required: false
+  deletion-mode:
+    description: 'Deletion mode for removed markdown files: hard-delete or keep'
+    required: false
+  write-back-frontmatter:
+    description: 'Write notion page IDs back to markdown frontmatter and push bot commit (true/false)'
+    required: false
+  base-revision:
+    description: 'Optional git base revision for change detection (e.g. PR base SHA)'
+    required: false
 runs:
   using: 'node20'
   main: 'dist/main.js'

@@ -5,33 +5,99 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import graymatter from 'gray-matter';
 
-import { getCtx } from './actionCtx';
-import { getChangedMdFiles } from './git';
-import { isNotionFrontmatter } from './notion';
+import { getCtx, type TargetEnv } from './actionCtx';
+import { commitAndPushFiles, getChangedMdFiles, getFileContentAtRevision, type MdFileChange } from './git';
+import { isNotionFrontmatter, type NotionFrontmatter } from './notion';
 import { retry, RetryError } from './retry';
 
 export async function pushUpdatedMarkdownFiles() {
-  const markdownFiles = getChangedMdFiles();
-  console.log('Markdown files detected in latest commit', { markdownFiles });
+  const { baseRevision, writeBackFrontmatter } = getCtx();
+  const markdownFiles = getChangedMdFiles(baseRevision);
+  console.log('Markdown files detected for sync', { baseRevision, markdownFiles });
   const fileFailures: { file: string; message: string }[] = [];
-  for (const mdFileName of markdownFiles) {
-    const res = await retry(() => pushMarkdownFile(mdFileName), {
+  const filesNeedingWriteBack: string[] = [];
+  for (const mdFileChange of markdownFiles) {
+    const res = await retry(() => pushMarkdownFile(mdFileChange, filesNeedingWriteBack), {
       tries: 2,
     });
 
     if (res instanceof RetryError) {
       console.log('Failed to push markdown file', res);
-      fileFailures.push({ file: mdFileName, message: res.message });
+      fileFailures.push({ file: mdFileChange.path, message: res.message });
     }
   }
+
+  if (writeBackFrontmatter && filesNeedingWriteBack.length) {
+    try {
+      const pushed = commitAndPushFiles(
+        filesNeedingWriteBack,
+        'chore: persist notion page ids in frontmatter [skip notion sync]',
+      );
+      console.log('Frontmatter write-back commit result', {
+        files: filesNeedingWriteBack,
+        pushed,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown write-back failure';
+      fileFailures.push({
+        file: filesNeedingWriteBack.join(','),
+        message: `Write-back commit failed: ${message}`,
+      });
+    }
+  }
+
   if (fileFailures.length) {
     core.setFailed(`Files failed to push: ${JSON.stringify(fileFailures)}`);
   }
 }
 
-export async function pushMarkdownFile(mdFilePath: string) {
-  const { notion, notionParentPageId } = getCtx();
-  console.log('Starting markdown sync', { mdFilePath, notionParentPageId, syncEngine: 'notion-markdown' });
+export async function pushMarkdownFile(
+  mdFileChange: MdFileChange,
+  filesNeedingWriteBack: string[],
+) {
+  const { notion, notionParentPageId, targetEnv, deletionMode, baseRevision, writeBackFrontmatter } = getCtx();
+  const mdFilePath = mdFileChange.path;
+  console.log('Starting markdown sync', {
+    mdFileChange,
+    notionParentPageId,
+    targetEnv,
+    deletionMode,
+  });
+
+  if (mdFileChange.status === 'D') {
+    if (deletionMode === 'keep') {
+      console.log('Skipping deleted markdown file because deletion-mode=keep', { file: mdFilePath });
+      return;
+    }
+    if (!baseRevision) {
+      throw new Error(`Cannot process deleted file ${mdFilePath} without base-revision input`);
+    }
+    const oldContent = getFileContentAtRevision(baseRevision, mdFilePath);
+    if (!oldContent) {
+      console.log('Deleted file content could not be loaded from base revision, skipping delete', {
+        file: mdFilePath,
+        baseRevision,
+      });
+      return;
+    }
+    const oldMatter = graymatter(oldContent);
+    if (!isNotionFrontmatter(oldMatter.data)) {
+      console.log('Deleted file has no notion frontmatter, skipping delete', { file: mdFilePath });
+      return;
+    }
+    const pageId = resolvePageIdForEnv(oldMatter.data, targetEnv);
+    if (!pageId) {
+      console.log('Deleted file has no mapped Notion page id for env, skipping delete', {
+        file: mdFilePath,
+        targetEnv,
+      });
+      return;
+    }
+    console.log('Deleting Notion page for removed markdown file', { file: mdFilePath, pageId, targetEnv });
+    await notion.deletePage(pageId);
+    return;
+  }
+
   const fileContents = await pfs.readFile(mdFilePath, { encoding: 'utf-8' });
   const fileMatter = graymatter(fileContents);
 
@@ -42,16 +108,19 @@ export async function pushMarkdownFile(mdFilePath: string) {
   const pageData = fileMatter.data;
   let pageId: string | undefined;
   let pageTitle: string | undefined;
+  let pageCreated = false;
 
-  if (typeof pageData.notion_page === 'string') {
+  const envPageId = resolvePageIdForEnv(pageData, targetEnv);
+  if (typeof envPageId === 'string') {
     console.log('Notion page frontmatter found', {
       frontmatter: fileMatter.data,
       file: mdFilePath,
+      targetEnv,
     });
 
-    pageId = pageData.notion_page.startsWith('http')
-      ? path.basename(new URL(pageData.notion_page).pathname).split('-').at(-1)
-      : pageData.notion_page;
+    pageId = envPageId.startsWith('http')
+      ? path.basename(new URL(envPageId).pathname).split('-').at(-1)
+      : envPageId;
 
     if (!pageId) {
       throw new Error('Could not get page ID from frontmatter');
@@ -91,6 +160,7 @@ export async function pushMarkdownFile(mdFilePath: string) {
       }
 
       pageId = await notion.createPage(notionParentPageId, canonicalTitle);
+      pageCreated = true;
       console.log(`Created Notion page for "${canonicalTitle}": ${pageId}`);
     }
 
@@ -104,6 +174,16 @@ export async function pushMarkdownFile(mdFilePath: string) {
   if (pageTitle) {
     console.log(`Updating title: ${pageTitle}`);
     await notion.updatePageTitle(pageId, pageTitle);
+  }
+
+  if (pageCreated) {
+    setPageIdForEnv(pageData, targetEnv, pageId);
+    if (writeBackFrontmatter) {
+      const updatedFrontmatter = graymatter.stringify(fileMatter.content, pageData);
+      await pfs.writeFile(mdFilePath, updatedFrontmatter, { encoding: 'utf-8' });
+      filesNeedingWriteBack.push(mdFilePath);
+      console.log('Updated frontmatter with environment page id', { file: mdFilePath, targetEnv, pageId });
+    }
   }
 
   const sourceUrl = createGithubFileUrl(mdFilePath);
@@ -159,4 +239,25 @@ function createGithubFileUrl(fileName: string) {
     return undefined;
   }
   return `${repositoryUrl}/blob/${github.context.sha}/${fileName}`;
+}
+
+function resolvePageIdForEnv(frontmatter: NotionFrontmatter, targetEnv: TargetEnv) {
+  if (targetEnv === 'preview' && typeof frontmatter.notion_page_preview === 'string') {
+    return frontmatter.notion_page_preview;
+  }
+  if (targetEnv === 'prod' && typeof frontmatter.notion_page_prod === 'string') {
+    return frontmatter.notion_page_prod;
+  }
+  if (typeof frontmatter.notion_page === 'string') {
+    return frontmatter.notion_page;
+  }
+  return undefined;
+}
+
+function setPageIdForEnv(frontmatter: NotionFrontmatter, targetEnv: TargetEnv, pageId: string) {
+  if (targetEnv === 'preview') {
+    frontmatter.notion_page_preview = pageId;
+    return;
+  }
+  frontmatter.notion_page_prod = pageId;
 }

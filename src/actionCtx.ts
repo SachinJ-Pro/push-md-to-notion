@@ -2,9 +2,16 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { NotionApi } from './notion';
 
+export type TargetEnv = 'preview' | 'prod';
+export type DeletionMode = 'hard-delete' | 'keep';
+
 interface ActionCtx {
   notion: NotionApi;
   notionParentPageId: string;
+  targetEnv: TargetEnv;
+  deletionMode: DeletionMode;
+  writeBackFrontmatter: boolean;
+  baseRevision?: string;
 }
 class ContextError extends Error {}
 

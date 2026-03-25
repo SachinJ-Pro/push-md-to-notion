@@ -106,10 +106,19 @@ export class NotionApi {
       page_id: pageId,
     });
   }
+
+  public async deletePage(pageId: string) {
+    await this.client.pages.update({
+      page_id: pageId,
+      in_trash: true,
+    });
+  }
 }
 
 export interface NotionFrontmatter {
   notion_page?: string;
+  notion_page_preview?: string;
+  notion_page_prod?: string;
   title?: string;
   [key: string]: unknown;
 }
@@ -169,6 +178,10 @@ export function isNotionFrontmatter(fm: unknown): fm is NotionFrontmatter {
   const castFm = fm as NotionFrontmatter;
   return (
     (typeof castFm?.notion_page === 'string' || typeof castFm?.notion_page === 'undefined') &&
+    (typeof castFm?.notion_page_preview === 'string' ||
+      typeof castFm?.notion_page_preview === 'undefined') &&
+    (typeof castFm?.notion_page_prod === 'string' ||
+      typeof castFm?.notion_page_prod === 'undefined') &&
     (typeof castFm?.title === 'string' || typeof castFm?.title === 'undefined')
   );
 }
