@@ -112,12 +112,19 @@ export async function pushMarkdownFile(mdFilePath: string) {
   }
 
   console.log('Adding markdown content');
-  await notion.appendMarkdown(pageId, fileMatter.content, [createWarningBlock(mdFilePath)]);
+  await notion.appendMarkdown(pageId, sanitizeNotionUnsupportedLinks(fileMatter.content), [
+    createWarningBlock(mdFilePath),
+  ]);
   console.log('Markdown sync completed', { mdFilePath, pageId });
 }
 
 function normalizeTitle(value: string) {
   return value.trim().toLowerCase();
+}
+
+function sanitizeNotionUnsupportedLinks(markdown: string) {
+  // Notion API rejects fragment-only links like [Section](#section-id) as invalid URLs.
+  return markdown.replace(/\[([^\]]+)\]\(#([^)]+)\)/g, '$1');
 }
 
 function createWarningBlock(fileName: string): BlockObjectRequest {

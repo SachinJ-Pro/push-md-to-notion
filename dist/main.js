@@ -59975,11 +59975,16 @@ async function pushMarkdownFile(mdFilePath) {
     await notion.updatePageTitle(pageId, pageTitle);
   }
   console.log("Adding markdown content");
-  await notion.appendMarkdown(pageId, fileMatter.content, [createWarningBlock(mdFilePath)]);
+  await notion.appendMarkdown(pageId, sanitizeNotionUnsupportedLinks(fileMatter.content), [
+    createWarningBlock(mdFilePath)
+  ]);
   console.log("Markdown sync completed", { mdFilePath, pageId });
 }
 function normalizeTitle(value) {
   return value.trim().toLowerCase();
+}
+function sanitizeNotionUnsupportedLinks(markdown) {
+  return markdown.replace(/\[([^\]]+)\]\(#([^)]+)\)/g, "$1");
 }
 function createWarningBlock(fileName) {
   return {
