@@ -43,7 +43,6 @@ jobs:
         with:
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-parent-page-id: ${{ secrets.NOTION_PARENT_PAGE_ID }}
-          sync-engine: notion-markdown
 ```
 
 ## 3. Choose a Notion parent page and add the integration
@@ -70,11 +69,6 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
 - no match: create a new page under `notion-parent-page-id`
 - multiple matches: fail for that file as ambiguous
 
-## Optional input: sync engine
-
-- `sync-engine: notion-markdown` (default) uses Notion's native markdown API.
-- `sync-engine: block-parser` uses the legacy markdown-to-block parser path.
-
 # Current Features
 
 - Syncs changed markdown files from the latest commit in the checked out branch.
@@ -83,18 +77,16 @@ If `notion_page` is omitted, the action tries to find a Notion page by matching 
   - page title = markdown filename without `.md`
   - trimmed, case-insensitive title match
   - create page under `notion-parent-page-id` when no match exists
-- Uses Notion native markdown sync by default (`sync-engine: notion-markdown`).
-- Supports fallback sync via parser path (`sync-engine: block-parser`).
+- Uses Notion native markdown API for page content updates.
 - Preserves backward compatibility for existing files that already use `notion_page`.
-- Automatically clears existing Notion page content and appends converted markdown blocks.
-- Adds a warning callout at the top of each synced page pointing to the GitHub markdown source.
-- Handles Notion API rejection of fragment-only markdown links (`#section`) by sanitizing them before upload.
+- Replaces existing page content with markdown using Notion's own parser.
+- Adds a markdown warning blockquote at the top pointing to the GitHub source file.
 
 # Current Limitations
 
 - Only markdown files from the latest commit are synced (not the full PR diff by default).
-- Fragment-only links like `[Section](#section-id)` are converted to plain text, so in-page TOC links are not clickable in Notion.
-- Local/relative image paths are not uploaded to Notion; use publicly reachable image URLs for reliable rendering.
+- Rendering behavior follows Notion markdown API rules (some markdown/HTML variants may still render differently than GitHub).
+- Local/relative image paths are not uploaded by this action; use publicly reachable image URLs.
 - Duplicate page-title matches under the selected parent are treated as errors.
 - Requires `notion-parent-page-id` input for create-path behavior.
 
@@ -106,4 +98,4 @@ This tool has all of the standard [Notion API limits](https://developers.notion.
 
 # Thanks
 
-This project is mostly a wire-up of the [Notion client](https://www.npmjs.com/package/@notionhq/client) and [`@tryfabric/martian`](https://www.npmjs.com/package/@tryfabric/martian). Many thanks to the maintainers of those projects!
+This project is mostly a wire-up of the [Notion client](https://www.npmjs.com/package/@notionhq/client). Many thanks to the maintainers.

@@ -1,10 +1,4 @@
 import { Client } from '@notionhq/client';
-import type {
-  AppendBlockChildrenParameters,
-  BlockObjectRequest,
-} from '@notionhq/client/build/src/api-endpoints';
-import { markdownToBlocks } from '@tryfabric/martian';
-import { batch } from './batch';
 
 /**
  * Class for managing Notion client state and methods needed for the action.
@@ -96,10 +90,6 @@ export class NotionApi {
     return pages;
   }
 
-  public async clearPage(pageId: string) {
-    await this.client.pages.update({ erase_content: true, page_id: pageId });
-  }
-
   public async replacePageContentWithMarkdown(pageId: string, markdown: string) {
     await this.client.pages.updateMarkdown({
       page_id: pageId,
@@ -115,47 +105,6 @@ export class NotionApi {
     return this.client.pages.retrieveMarkdown({
       page_id: pageId,
     });
-  }
-
-  /**
-   * Convert markdown to the notion block data format and append it to an existing block.
-   * @param blockId Block which the markdown elements will be appended to.
-   * @param md Markdown as string.
-   */
-  public async appendMarkdown(blockId: string, md: string, preamble: BlockObjectRequest[] = []) {
-    const blocksToAppend = [...preamble, ...markdownToBlocks(md)];
-
-    await batch(
-      blocksToAppend,
-      async (blockBatch) => {
-        await this.client.blocks.children.append({
-          block_id: blockId,
-          children: blockBatch as AppendBlockChildrenParameters['children'],
-        });
-      },
-      { size: 100 },
-    );
-  }
-
-  /**
-   * Iterate over all of the childeren of a given block. This manages the underlying paginated API.
-   * @param blockId Block being listed.
-   * @param batchSize Number of childeren to fetch in each call to notion. Max 100.
-   */
-  public async *listChildBlocks(blockId: string, batchSize = 50) {
-    let has_more = true;
-    do {
-      const blocks = await this.client.blocks.children.list({
-        block_id: blockId,
-        page_size: batchSize,
-      });
-
-      for (const block of blocks.results) {
-        yield block;
-      }
-
-      has_more = blocks.has_more;
-    } while (has_more);
   }
 }
 

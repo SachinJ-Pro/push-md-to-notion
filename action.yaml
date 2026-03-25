@@ -12,9 +12,6 @@ inputs:
   notion-parent-page-id:
     description: 'Parent Notion page ID used for creating new pages when notion_page frontmatter is not present'
     required: true
-  sync-engine:
-    description: 'Sync engine: notion-markdown (default) or block-parser'
-    required: false
 runs:
   using: 'node20'
   main: 'dist/main.js'
