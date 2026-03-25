@@ -4,6 +4,7 @@ import { NotionApi } from './notion';
 
 interface ActionCtx {
   notion: NotionApi;
+  notionParentPageId: string;
 }
 class ContextError extends Error {}
 

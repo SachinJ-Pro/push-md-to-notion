@@ -26,43 +26,89 @@ export async function pushUpdatedMarkdownFiles() {
     }
   }
   if (fileFailures.length) {
-    core.setFailed(`Files failed to push: ${fileFailures}`);
+    core.setFailed(`Files failed to push: ${JSON.stringify(fileFailures)}`);
   }
 }
 
 export async function pushMarkdownFile(mdFilePath: string) {
-  const { notion } = getCtx();
+  const { notion, notionParentPageId } = getCtx();
   const fileContents = await pfs.readFile(mdFilePath, { encoding: 'utf-8' });
   const fileMatter = graymatter(fileContents);
 
   if (!isNotionFrontmatter(fileMatter.data)) {
-    return;
+    throw new Error(`Invalid frontmatter format for ${mdFilePath}`);
   }
 
-  console.log('Notion frontmatter found', {
-    frontmatter: fileMatter.data,
-    file: mdFilePath,
-  });
-
   const pageData = fileMatter.data;
-  const pageId = pageData.notion_page.startsWith('http')
-    ? path.basename(new URL(pageData.notion_page).pathname).split('-').at(-1)
-    : pageData.notion_page;
+  let pageId: string | undefined;
+  let pageTitle: string | undefined;
+
+  if (typeof pageData.notion_page === 'string') {
+    console.log('Notion page frontmatter found', {
+      frontmatter: fileMatter.data,
+      file: mdFilePath,
+    });
+
+    pageId = pageData.notion_page.startsWith('http')
+      ? path.basename(new URL(pageData.notion_page).pathname).split('-').at(-1)
+      : pageData.notion_page;
+
+    if (!pageId) {
+      throw new Error('Could not get page ID from frontmatter');
+    }
+
+    if (pageData.title) {
+      pageTitle = pageData.title;
+    }
+  } else {
+    const canonicalTitle = path.basename(mdFilePath, '.md');
+    const matches = (await notion.searchPagesByTitle(canonicalTitle, notionParentPageId || undefined)).filter(
+      (page) => normalizeTitle(page.title) === normalizeTitle(canonicalTitle),
+    );
+
+    if (matches.length > 1) {
+      const duplicatePageInfo = matches.map((match) => `${match.title} (${match.id})`).join(', ');
+      throw new Error(
+        `Multiple Notion pages matched "${canonicalTitle}" for ${mdFilePath}: ${duplicatePageInfo}`,
+      );
+    }
+
+    if (matches.length === 1) {
+      const match = matches[0];
+      pageId = match.id;
+      console.log(`Found existing Notion page for "${canonicalTitle}": ${match.id}`);
+    } else {
+      if (!notionParentPageId) {
+        throw new Error(
+          `No matching Notion page for "${canonicalTitle}" and notion-parent-page-id is missing`,
+        );
+      }
+
+      pageId = await notion.createPage(notionParentPageId, canonicalTitle);
+      console.log(`Created Notion page for "${canonicalTitle}": ${pageId}`);
+    }
+
+    pageTitle = canonicalTitle;
+  }
 
   if (!pageId) {
-    throw new Error('Could not get page ID from frontmatter');
+    throw new Error(`Could not determine Notion page for ${mdFilePath}`);
   }
 
   console.log('Clearing page content');
   await notion.clearPage(pageId);
 
-  if (pageData.title) {
-    console.log(`Updating title: ${pageData.title}`);
-    await notion.updatePageTitle(pageId, pageData.title);
+  if (pageTitle) {
+    console.log(`Updating title: ${pageTitle}`);
+    await notion.updatePageTitle(pageId, pageTitle);
   }
 
   console.log('Adding markdown content');
   await notion.appendMarkdown(pageId, fileMatter.content, [createWarningBlock(mdFilePath)]);
+}
+
+function normalizeTitle(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function createWarningBlock(fileName: string): BlockObjectRequest {

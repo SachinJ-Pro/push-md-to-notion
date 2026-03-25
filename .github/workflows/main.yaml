@@ -17,3 +17,4 @@ jobs:
         id: push_markdown
         with:
           notion-token: ${{ secrets.NOTION_TOKEN }}
+          notion-parent-page-id: ${{ secrets.NOTION_PARENT_PAGE_ID }}

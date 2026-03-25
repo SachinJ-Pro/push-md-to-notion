@@ -42,15 +42,16 @@ jobs:
         id: push_markdown
         with:
           notion-token: ${{ secrets.NOTION_TOKEN }}
+          notion-parent-page-id: ${{ secrets.NOTION_PARENT_PAGE_ID }}
 ```
 
-## 3. Create a Notion page and add the integration
+## 3. Choose a Notion parent page and add the integration
 
-A Notion page needs to be created before markdown content will be synced to it. You can add your integration to a root page or to each synced page.
+Share a Notion page with your integration and use its page ID as `notion-parent-page-id`. New markdown files are created as child pages under this parent when no `notion_page` frontmatter is provided.
 
-## 4. Add the page link
+## 4. Add optional frontmatter overrides
 
-You're now ready to start pushing changes to Notion! You can add the following frontmatter fields to an existing markdown file or to a new one.
+You can still pin a markdown file to a specific Notion page:
 
 ```
 ---
@@ -63,7 +64,10 @@ title: <Your Title>
 This content will by synced to Notion!
 ```
 
-Repeat steps 3 and 4 for new markdown files.
+If `notion_page` is omitted, the action tries to find a Notion page by matching filename (without `.md`) to page title using trimmed, case-insensitive comparison:
+- one match: update that page
+- no match: create a new page under `notion-parent-page-id`
+- multiple matches: fail for that file as ambiguous
 
 # Limitations
 

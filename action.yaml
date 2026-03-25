@@ -9,6 +9,9 @@ inputs:
   notion-token:
     description: 'Notion integration token'
     required: true
+  notion-parent-page-id:
+    description: 'Parent Notion page ID used for creating new pages when notion_page frontmatter is not present'
+    required: true
 runs:
   using: 'node20'
   main: 'dist/main.js'
